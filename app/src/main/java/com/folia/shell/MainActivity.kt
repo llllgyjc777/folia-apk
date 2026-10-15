@@ -389,7 +389,7 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         // Folia Web 站点地址（可替换为你自己的部署地址）
-        private const val HOME_URL = "https://folia.lanerc.me"
+        private const val HOME_URL = "http://124.220.189.212"
         private const val REQ_STORAGE = 1001
     }
 }
