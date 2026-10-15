@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#09090B"
+        android:pathData="M0,0h108v108h-108z" />
+    <!-- 声波柱：象征歌词/音乐的波形 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M30,72 L30,52 A2,2 0 0,1 34,52 L34,72 A2,2 0 0,1 30,72 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M38,78 L38,38 A2,2 0 0,1 42,38 L42,78 A2,2 0 0,1 38,78 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M46,84 L46,30 A2,2 0 0,1 50,30 L50,84 A2,2 0 0,1 46,84 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,74 L54,44 A2,2 0 0,1 58,44 L58,74 A2,2 0 0,1 54,74 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M62,80 L62,36 A2,2 0 0,1 66,36 L66,80 A2,2 0 0,1 62,80 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M70,68 L70,50 A2,2 0 0,1 74,50 L74,68 A2,2 0 0,1 70,68 Z" />
+</vector>
