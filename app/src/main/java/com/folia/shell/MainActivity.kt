@@ -86,6 +86,7 @@ class MainActivity : AppCompatActivity() {
         setupBackHandling()
 
         webView.loadUrl(HOME_URL)
+        startMemoryWatchdog()
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -94,9 +95,21 @@ class MainActivity : AppCompatActivity() {
 
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
-        settings.databaseEnabled = true
+        settings.databaseEnabled = false
         settings.loadWithOverviewMode = true
         settings.useWideViewPort = true
+
+        // 限制缓存，避免内存/磁盘无限膨胀（小米 HyperOS 会杀超限 WebView）
+        settings.cacheMode = WebSettings.LOAD_DEFAULT
+        try { webView.clearCache(false) } catch (_: Throwable) {}
+
+        // 优先走 HTTP 缓存，降低重复渲染开销
+        settings.setRenderPriority(WebSettings.RenderPriority.HIGH)
+        settings.setGeolocationEnabled(false)
+        settings.setNeedInitialFocus(false)
+        webView.isVerticalScrollBarEnabled = false
+        webView.isHorizontalScrollBarEnabled = false
+        webView.isSoundEffectsEnabled = true
         settings.setSupportZoom(false)
         settings.builtInZoomControls = false
         settings.displayZoomControls = false
@@ -116,6 +129,25 @@ class MainActivity : AppCompatActivity() {
             ?: settings.userAgentString
 
         webView.webViewClient = object : WebViewClient() {
+            override fun onRenderProcessGone(
+                view: WebView,
+                detail: android.webkit.RenderProcessGoneDetail
+            ): Boolean {
+                // 关键防线：渲染进程被系统（小米 HyperOS）回收时，自行处理避免循环重启
+                try {
+                    view.destroy()
+                } catch (_: Throwable) {}
+                try {
+                    Toast.makeText(
+                        this@MainActivity,
+                        "网页进程被系统回收，正在恢复…",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    recreate()
+                } catch (_: Throwable) {}
+                return true
+            }
+
             override fun shouldOverrideUrlLoading(
                 view: WebView,
                 request: WebResourceRequest
@@ -137,6 +169,7 @@ class MainActivity : AppCompatActivity() {
                 super.onPageFinished(view, url)
                 progressBar.visibility = View.GONE
                 swipeRefresh.isRefreshing = false
+                injectPerfGuards(view)
             }
 
             override fun onReceivedError(
@@ -232,6 +265,75 @@ class MainActivity : AppCompatActivity() {
         })
     }
 
+    /**
+     * 注入性能守卫脚本：
+     * 1) 把 requestAnimationFrame 钳制到 30fps —— 歌词动画照常，但渲染开销砍半
+     * 2) 屏蔽 AI 主题生成请求（@google/genai 最吃内存，纯本地不需要）
+     * 3) 降低动画质量：media 查询伪装成"减少动态效果"
+     */
+    private fun injectPerfGuards(view: WebView) {
+        val js = """
+            (function () {
+              if (window.__foliaPerfGuardsInstalled) return;
+              window.__foliaPerfGuardsInstalled = true;
+
+              // ---- 1. 全局限帧 30fps ----
+              try {
+                var TARGET_FPS = 30;
+                var INTERVAL = 1000 / TARGET_FPS;
+                var _raf = window.requestAnimationFrame.bind(window);
+                var last = 0, timer = null;
+                window.requestAnimationFrame = function (cb) {
+                  var now = Date.now();
+                  var wait = Math.max(0, INTERVAL - (now - last));
+                  if (timer) { clearTimeout(timer); timer = null; }
+                  timer = setTimeout(function () {
+                    last = Date.now();
+                    timer = null;
+                    _raf(cb);
+                  }, wait);
+                  return timer;
+                };
+                var _caf = window.cancelAnimationFrame.bind(window);
+                window.cancelAnimationFrame = function (id) {
+                  try { clearTimeout(id); } catch (e) {}
+                  try { _caf(id); } catch (e) {}
+                };
+              } catch (e) {}
+
+              // ---- 2. 屏蔽 AI 主题生成（省内存/省流量）----
+              try {
+                var _fetch = window.fetch;
+                if (_fetch) {
+                  window.fetch = function (input, init) {
+                    var url = (typeof input === 'string') ? input : (input && input.url) || '';
+                    if (/generativelanguage\.googleapis\.com|aiplatform\.googleapis\.com|aistudio|gemini/i.test(url)) {
+                      return Promise.reject(new Error('blocked by shell'));
+                    }
+                    return _fetch.apply(this, arguments);
+                  };
+                }
+              } catch (e) {}
+
+              // ---- 3. 降级动态效果偏好，部分动画库会自动降帧 ----
+              try {
+                var _matchMedia = window.matchMedia;
+                window.matchMedia = function (q) {
+                  if (typeof q === 'string' && q.indexOf('prefers-reduced-motion') >= 0) {
+                    var r = _matchMedia.call(window, q);
+                    try {
+                      Object.defineProperty(r, 'matches', { get: function () { return false; } });
+                    } catch (e) {}
+                    return r;
+                  }
+                  return _matchMedia.call(window, q);
+                };
+              } catch (e) {}
+            })();
+        """.trimIndent()
+        view.evaluateJavascript(js, null)
+    }
+
     private fun showOfflineHint() {
         val html = """
             <!DOCTYPE html>
@@ -279,10 +381,47 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        memWatchdog?.removeCallbacksAndMessages(null)
+        memWatchdog = null
         filePathCallback?.onReceiveValue(null)
         filePathCallback = null
         webView.destroy()
         super.onDestroy()
+    }
+
+    private var memWatchdog: android.os.Handler? = null
+    private val MEM_LIMIT_MB = 420L
+
+    // B2：内存红线监控。超过阈值就清 WebView 缓存并触发 GC，避免被小米 HyperOS 强杀
+    private fun startMemoryWatchdog() {
+        memWatchdog = android.os.Handler(android.os.Looper.getMainLooper())
+        val task = object : Runnable {
+            override fun run() {
+                try {
+                    val am = getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+                    val pids = intArrayOf(android.os.Process.myPid())
+                    val mi = am.getProcessMemoryInfo(pids)
+                    val usedMb = if (mi.isNotEmpty()) mi[0].totalPss.toLong() / 1024L else 0L
+                    if (usedMb > MEM_LIMIT_MB) {
+                        try { webView.clearCache(false) } catch (_: Throwable) {}
+                        try { webView.clearFormData() } catch (_: Throwable) {}
+                        Runtime.getRuntime().gc()
+                    }
+                } catch (_: Throwable) {}
+                memWatchdog?.postDelayed(this, 30_000L)
+            }
+        }
+        memWatchdog?.postDelayed(task, 30_000L)
+    }
+
+    // 系统内存紧张时，主动清理 WebView 缓存，降低被系统强杀的概率
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+            try {
+                webView.clearCache(false)
+            } catch (_: Throwable) {}
+        }
     }
 
     companion object {
