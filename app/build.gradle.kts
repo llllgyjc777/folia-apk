@@ -45,4 +45,6 @@ dependencies {
     implementation("androidx.webkit:webkit:1.11.0")
     implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
     implementation("com.google.android.material:material:1.12.0")
+    // 锁屏 / 通知栏播放控制
+    implementation("androidx.media:media:1.7.0")
 }

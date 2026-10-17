@@ -41,8 +41,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private lateinit var swipeRefresh: SwipeRefreshLayout
     private lateinit var progressBar: ProgressBar
+    private lateinit var mediaBridge: MediaBridge
 
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
+    private var playbackStarted = false
 
     private val fileChooserLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -82,11 +84,42 @@ class MainActivity : AppCompatActivity() {
         swipeRefresh = findViewById(R.id.swiperefresh)
         progressBar = findViewById(R.id.progress_bar)
 
+        mediaBridge = MediaBridge(webView)
+        webView.addJavascriptInterface(mediaBridge, "FoliaNative")
+        // 原生指令 -> WebView
+        PlaybackService.commandSink = { cmd -> mediaBridge.sendCommand(cmd) }
+
         setupWebView()
         setupBackHandling()
 
         webView.loadUrl(HOME_URL)
         startMemoryWatchdog()
+        requestNotificationPermissionIfNeeded()
+    }
+
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED
+            ) {
+                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_NOTIF)
+            }
+        }
+    }
+
+    /** 启动锁屏/通知栏播放服务（只启动一次） */
+    private fun ensurePlaybackService() {
+        if (playbackStarted) return
+        playbackStarted = true
+        try {
+            val i = Intent(this, PlaybackService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(i)
+            } else {
+                startService(i)
+            }
+        } catch (_: Throwable) {
+        }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -169,6 +202,7 @@ class MainActivity : AppCompatActivity() {
                 super.onPageFinished(view, url)
                 progressBar.visibility = View.GONE
                 swipeRefresh.isRefreshing = false
+                injectShellBridge(view)
             }
 
             override fun onReceivedError(
@@ -297,6 +331,21 @@ class MainActivity : AppCompatActivity() {
         view.evaluateJavascript(js, null)
     }
 
+    /**
+     * 注入锁屏播放桥接脚本（assets/shell-bridge.js）
+     * 把 WebView 的播放状态同步给原生 MediaSession
+     */
+    private fun injectShellBridge(view: WebView) {
+        try {
+            val js = assets.open("shell-bridge.js").bufferedReader().use { it.readText() }
+            view.evaluateJavascript(js) {
+                ensurePlaybackService()
+            }
+        } catch (e: Throwable) {
+            android.util.Log.w("FoliaShell", "注入桥接脚本失败", e)
+        }
+    }
+
     private fun showOfflineHint() {
         val html = """
             <!DOCTYPE html>
@@ -391,5 +440,6 @@ class MainActivity : AppCompatActivity() {
         // Folia Web 站点地址（可替换为你自己的部署地址）
         private const val HOME_URL = "http://124.220.189.212"
         private const val REQ_STORAGE = 1001
+        private const val REQ_NOTIF = 1002
     }
 }
