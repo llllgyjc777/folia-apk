@@ -11,14 +11,27 @@ android {
         applicationId = "com.folia.shell"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.1.0"
+    }
+
+    // 固定签名：仓库内自带 keystore，保证每次云编译签名一致，可直接覆盖安装
+    signingConfigs {
+        create("fixed") {
+            storeFile = file("../folia.keystore")
+            storePassword = "folia123456"
+            keyAlias = "folia"
+            keyPassword = "folia123456"
+        }
     }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("fixed")
+        }
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("fixed")
         }
     }
 
