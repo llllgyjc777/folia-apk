@@ -21,6 +21,7 @@ class MediaBridge(private val webView: WebView) {
     @JavascriptInterface
     fun onState(json: String) {
         try {
+            android.util.Log.d("FoliaState", json)
             val o = org.json.JSONObject(json)
             val svc = PlaybackService.instance ?: return
             svc.updateState(

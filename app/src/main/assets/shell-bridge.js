@@ -23,6 +23,11 @@
     try { console.log('[ShellBridge] ' + msg); } catch (e) {}
   }
 
+  // 诊断专用：只走 console，绕开 NATIVE.log
+  function diag(msg) {
+    try { console.log('[DIAGX] ' + msg); } catch (e) {}
+  }
+
   // ---------- 启动时：强制锁定歌词来源为本音源 ----------
   // Folia 的 autoMatchBestLyric 硬编码只问 netease / kugou / qq，
   // 开关开着就会把汽水的歌词覆盖成别家的。这里直接关掉。
@@ -195,6 +200,9 @@
     }
 
     try {
+      diag('title=[' + (meta.title || '') + '] artist=[' + (meta.artist || '') + ']'
+        + ' bar=' + (document.querySelector('[data-ponder="player-bar"]') ? 1 : 0)
+        + ' lyric=[' + (lyricText || '').slice(0, 20) + ']');
       NATIVE.onState(JSON.stringify(payload));
     } catch (e) {
       console.warn('[ShellBridge] onState 失败', e);

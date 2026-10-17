@@ -338,6 +338,9 @@ class MainActivity : AppCompatActivity() {
     private fun injectShellBridge(view: WebView) {
         try {
             val js = assets.open("shell-bridge.js").bufferedReader().use { it.readText() }
+            // 先复位防重入标志，否则 SPA 路由切换触发的二次 onPageFinished
+            // 会让新版脚本被旧版挡在门外（旧代码继续生效）。
+            view.evaluateJavascript("try{window.__foliaShellBridgeInstalled=false;}catch(e){}", null)
             view.evaluateJavascript(js) {
                 ensurePlaybackService()
             }
