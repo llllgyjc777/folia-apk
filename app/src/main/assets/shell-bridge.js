@@ -128,6 +128,7 @@
 
   // ---------- 定时推送状态 ----------
   var lastSig = '';
+  var diagCount = 0;
   function pushState() {
     var a = findAudio();
     var meta = readMeta();
@@ -150,6 +151,30 @@
       + '|' + Math.floor(position / 1000) + '|' + duration;
     if (sig === lastSig) return;
     lastSig = sig;
+
+    // 诊断：前 3 次上报若 title 为空，打印页面结构帮助定位
+    if (!payload.title && diagCount < 3) {
+      diagCount++;
+      try {
+        var bars = document.querySelectorAll('[data-ponder="player-bar"]');
+        var allTitle = document.querySelectorAll('[title]:not([title=""])');
+        var sample = [];
+        for (var q = 0; q < Math.min(allTitle.length, 12); q++) {
+          var nd = allTitle[q];
+          sample.push(
+            (nd.tagName || '?').toLowerCase()
+            + '[title=' + (nd.getAttribute('title') || '').slice(0, 20) + ']'
+            + (nd.closest && nd.closest('button') ? '{inBtn}' : '')
+          );
+        }
+        log('DIAG bar=' + bars.length
+          + ' audio=' + !!a
+          + ' titled=' + allTitle.length
+          + ' sample=' + sample.join(' | '));
+      } catch (e) {
+        log('DIAG 失败 ' + e);
+      }
+    }
 
     try {
       NATIVE.onState(JSON.stringify(payload));
