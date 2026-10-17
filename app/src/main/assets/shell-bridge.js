@@ -62,16 +62,26 @@
 
     if (bar) {
       // 歌名：源码里给歌名节点设置了 title={currentSong.name}
+      // 但播放条上每个按钮也都有 title/aria-label，所以先收集全部候选，
+      // 排除按钮类文案后取「看起来像歌名」的那个。
       if (!title) {
-        var candidates = bar.querySelectorAll('[title]:not([title=""])');
-        for (var i = 0; i < candidates.length; i++) {
-          var tv = (candidates[i].getAttribute('title') || '').trim();
+        var all = bar.querySelectorAll('[title]:not([title=""])');
+        var best = '';
+        var BTN_RE = /^(播放|暂停|下一首|上一首|循环|关闭循环|开启循环|单曲循环|随机|打乱|音量|队列|喜欢|取消喜欢|歌词|时间轴|睡眠|歌单墙|搜索|设置|关闭|返回|最大化|最小化|Play|Pause|Next|Prev|Loop|Shuffle|Volume|Queue|Like|Mute)/i;
+        for (var i = 0; i < all.length; i++) {
+          var node = all[i];
+          // 按钮上的 title 一律跳过（按钮通常带 role 或就是 button 标签）
+          var tag = (node.tagName || '').toLowerCase();
+          if (tag === 'button') continue;
+          if (node.closest && node.closest('button')) continue;
+
+          var tv = (node.getAttribute('title') || '').trim();
           if (!tv || tv.length > 80) continue;
-          // 跳过纯控件提示（播放/暂停/循环等）
-          if (/^(播放|暂停|下一首|上一首|循环|随机|音量|队列|喜欢|Play|Pause|Next|Prev)/i.test(tv)) continue;
-          title = tv;
-          break;
+          if (BTN_RE.test(tv)) continue;
+          // 歌名一般比歌手长，取最长的那个候选
+          if (tv.length > best.length) best = tv;
         }
+        title = best;
       }
       // 歌名行：那个 font-bold 节点
       if (!title) {
@@ -91,7 +101,7 @@
           if (!t || t.length > 60) continue;
           if (t === title) continue;
           if (/^\d{1,2}:\d{2}/.test(t)) continue; // 时间戳
-          if (/^(播放|暂停|下一首|上一首|循环|随机|音量|队列|喜欢)/.test(t)) continue;
+          if (/^(播放|暂停|下一首|上一首|循环|关闭循环|开启循环|单曲循环|随机|打乱|音量|队列|喜欢|取消喜欢|歌词|时间轴|睡眠|歌单墙)/.test(t)) continue;
           artist = t;
           break;
         }
