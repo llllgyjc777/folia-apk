@@ -62,6 +62,11 @@ class PlaybackService : Service() {
     private var coverBitmap: Bitmap? = null
     private var lastCoverFetched: String = ""
 
+    /** 锁屏歌词悬浮窗 */
+    private var lyricOverlay: LyricOverlay? = null
+    private var lastLyricLine: String = ""
+    private var lastLyricDurationGuess: Long = 0
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -69,6 +74,7 @@ class PlaybackService : Service() {
         instance = this
         createChannel()
         setupSession()
+        lyricOverlay = LyricOverlay(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -136,7 +142,8 @@ class PlaybackService : Service() {
         newCoverUrl: String,
         newDurationMs: Long,
         newPositionMs: Long,
-        newIsPlaying: Boolean
+        newIsPlaying: Boolean,
+        newLyric: String = ""
     ) {
         title = newTitle
         artist = newArtist
@@ -151,8 +158,50 @@ class PlaybackService : Service() {
             fetchCover(newCoverUrl)
         }
 
+        // ---- 歌词悬浮窗 ----
+        updateLyricOverlay(newLyric, newIsPlaying)
+
         pushState()
     }
+
+    /**
+     * 驱动锁屏歌词动画
+     *
+     * 行内进度怎么算：网页只给「当前这一句」和整首进度，
+     * 没给每句的起止时间，所以这里用「上一句变成当前句的时刻」到「下一次换句的时刻」
+     * 之间的时间跨度作为这一句的时长近似。换句瞬间进度归零，随时间线性推进到 1。
+     */
+    private fun updateLyricOverlay(line: String, playing: Boolean) {
+        val ov = lyricOverlay ?: return
+
+        if (line.isBlank()) {
+            ov.hide()
+            lastLyricLine = ""
+            return
+        }
+
+        // 有歌词就显示（首次）
+        if (!ov.isShowing()) ov.show()
+
+        val now = System.currentTimeMillis()
+
+        if (line != lastLyricLine) {
+            // 换句：记录换句时刻，进度归零
+            lastLyricLine = line
+            lineChangedAt = now
+            ov.updateLyric(line, 0f)
+            return
+        }
+
+        // 同一句：按停留时长推进进度
+        if (lineChangedAt == 0L) lineChangedAt = now
+        val stay = (now - lineChangedAt).toFloat()
+        // 一句歌词大约 3~5 秒唱完，这里用 4 秒作为估计时长
+        val progress = (stay / 4000f).coerceIn(0f, 1f)
+        ov.updateLyric(line, progress)
+    }
+
+    private var lineChangedAt: Long = 0L
 
     private fun fetchCover(url: String) {
         Thread {
@@ -283,6 +332,8 @@ class PlaybackService : Service() {
     }
 
     override fun onDestroy() {
+        lyricOverlay?.hide()
+        lyricOverlay = null
         instance = null
         session?.isActive = false
         session?.release()

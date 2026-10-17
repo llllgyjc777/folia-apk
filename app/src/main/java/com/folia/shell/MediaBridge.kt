@@ -30,7 +30,8 @@ class MediaBridge(private val webView: WebView) {
                 o.optString("cover", ""),
                 o.optLong("duration", 0L),
                 o.optLong("position", 0L),
-                o.optBoolean("playing", false)
+                o.optBoolean("playing", false),
+                o.optString("lyric", "")
             )
         } catch (_: Throwable) {
         }

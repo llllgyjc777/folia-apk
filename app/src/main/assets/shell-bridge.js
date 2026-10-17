@@ -23,6 +23,16 @@
     try { console.log('[ShellBridge] ' + msg); } catch (e) {}
   }
 
+  // ---------- 启动时：强制锁定歌词来源为本音源 ----------
+  // Folia 的 autoMatchBestLyric 硬编码只问 netease / kugou / qq，
+  // 开关开着就会把汽水的歌词覆盖成别家的。这里直接关掉。
+  try {
+    if (window.localStorage.getItem('auto_use_best_lyric') !== 'false') {
+      window.localStorage.setItem('auto_use_best_lyric', 'false');
+      log('已关闭 auto_use_best_lyric（歌词锁定当前音源）');
+    }
+  } catch (e) {}
+
   // ---------- 工具：找页面里的 audio 元素 ----------
   function findAudio() {
     var list = document.querySelectorAll('audio');
@@ -34,16 +44,18 @@
   }
 
   // ---------- 工具：从 Folia 播放条读歌名/歌手/封面 ----------
-  // 结构参考 FloatingPlayerControls.tsx：
-  //   div[title={currentSong.name}]  -> 歌名
-  //   播放条里 .font-bold            -> 歌名行
-  //   播放条里 img                   -> 封面
+  // 真实结构（读源码 + DIAG 实测确认）：
+  //   收起态：[data-ponder="player-bar"] 内
+  //     TrackTitleNavigator -> div.group/title > div > div > span  ← 歌名纯文本
+  //   展开态：div.truncate.text-center.text-sm.font-bold          ← 歌名纯文本
+  //   播放条内 img                                                ← 封面
+  // 注意：歌名没有 title 属性，只能读 textContent。
   function readMeta() {
     var title = '';
     var artist = '';
     var cover = '';
 
-    // 1) Folia 自身若设置了 navigator.mediaSession（目前没设，留作以后兜底）
+    // 1) navigator.mediaSession（Folia 目前不设，留作兜底）
     try {
       var ms = navigator.mediaSession;
       if (ms && ms.metadata) {
@@ -54,55 +66,29 @@
       }
     } catch (e) {}
 
-    // 2) 精确锚点：data-ponder="player-bar"
     var bar = null;
-    try {
-      bar = document.querySelector('[data-ponder="player-bar"]');
-    } catch (e) {}
+    try { bar = document.querySelector('[data-ponder="player-bar"]'); } catch (e) {}
 
     if (bar) {
-      // 歌名：源码里给歌名节点设置了 title={currentSong.name}
-      // 但播放条上每个按钮也都有 title/aria-label，所以先收集全部候选，
-      // 排除按钮类文案后取「看起来像歌名」的那个。
-      if (!title) {
-        var all = bar.querySelectorAll('[title]:not([title=""])');
-        var best = '';
-        var BTN_RE = /^(播放|暂停|下一首|上一首|循环|关闭循环|开启循环|单曲循环|随机|打乱|音量|队列|喜欢|取消喜欢|歌词|时间轴|睡眠|歌单墙|搜索|设置|关闭|返回|最大化|最小化|Play|Pause|Next|Prev|Loop|Shuffle|Volume|Queue|Like|Mute)/i;
-        for (var i = 0; i < all.length; i++) {
-          var node = all[i];
-          // 按钮上的 title 一律跳过（按钮通常带 role 或就是 button 标签）
-          var tag = (node.tagName || '').toLowerCase();
-          if (tag === 'button') continue;
-          if (node.closest && node.closest('button')) continue;
-
-          var tv = (node.getAttribute('title') || '').trim();
-          if (!tv || tv.length > 80) continue;
-          if (BTN_RE.test(tv)) continue;
-          // 歌名一般比歌手长，取最长的那个候选
-          if (tv.length > best.length) best = tv;
-        }
-        title = best;
-      }
-      // 歌名行：那个 font-bold 节点
+      // 歌名：优先展开态的 .font-bold，其次标题导航器里的 span
       if (!title) {
         var bold = bar.querySelector('.font-bold');
         if (bold) {
           var bt = (bold.textContent || '').trim();
-          if (bt && bt.length <= 80) title = bt;
+          if (bt && bt.length <= 100) title = bt;
         }
       }
-      // 歌手：歌名之外第一个短叶子文本
-      if (!artist) {
-        var spans = bar.querySelectorAll('div,span,p');
-        for (var k = 0; k < spans.length; k++) {
-          var n = spans[k];
-          if (n.children.length > 0) continue; // 只要叶子节点
-          var t = (n.textContent || '').trim();
-          if (!t || t.length > 60) continue;
-          if (t === title) continue;
-          if (/^\d{1,2}:\d{2}/.test(t)) continue; // 时间戳
-          if (/^(播放|暂停|下一首|上一首|循环|关闭循环|开启循环|单曲循环|随机|打乱|音量|队列|喜欢|取消喜欢|歌词|时间轴|睡眠|歌单墙)/.test(t)) continue;
-          artist = t;
+      if (!title) {
+        // TrackTitleNavigator: .group\/title 下的 span
+        var g = bar.querySelector('[class*="group/title"]') || bar;
+        var spans = g.querySelectorAll('span');
+        for (var i = 0; i < spans.length; i++) {
+          var sp = spans[i];
+          if (sp.children.length > 0) continue;
+          var st = (sp.textContent || '').trim();
+          if (!st || st.length > 100) continue;
+          if (/^\d{1,2}:\d{2}/.test(st)) continue;
+          title = st;
           break;
         }
       }
@@ -113,7 +99,18 @@
       }
     }
 
-    // 3) 最后兜底：document.title 形式 "歌名 - 歌手"
+    // 歌手：播放条通常不显示歌手，退而从页面其它地方取
+    // Folia 展开播放条里有 "歌名 - 歌手 - 专辑" 形式，或用 audio 的 data 属性
+    if (!artist) {
+      try {
+        var a = findAudio();
+        if (a) {
+          artist = a.getAttribute('data-artist') || '';
+        }
+      } catch (e) {}
+    }
+
+    // 最后兜底：document.title "歌名 - 歌手"
     if (!title) {
       var dt = (document.title || '').trim();
       if (dt && dt.indexOf(' - ') > 0) {
@@ -126,12 +123,32 @@
     return { title: title, artist: artist, cover: cover };
   }
 
+  // ---------- 工具：抓当前歌词（用于锁屏歌词动画） ----------
+  // Folia 播放器页会把歌词渲染成一行行 DOM，当前行高亮。
+  // 这里抓「当前行文本 + 上下文几行」，供原生层做滚动动画。
+  function readLyrics() {
+    var cur = '';
+    var next = '';
+    try {
+      // 当前高亮行：Folia 用 data-active / aria-current 或色值区分
+      var cands = document.querySelectorAll(
+        '[data-active="true"],[aria-current="true"],[class*="lyric"] [class*="active"]'
+      );
+      for (var i = 0; i < cands.length; i++) {
+        var t = (cands[i].textContent || '').trim();
+        if (t && t.length < 200) { cur = t; break; }
+      }
+    } catch (e) {}
+    return { current: cur, next: next };
+  }
+
   // ---------- 定时推送状态 ----------
   var lastSig = '';
   var diagCount = 0;
   function pushState() {
     var a = findAudio();
     var meta = readMeta();
+    var lyricText = readLyrics().current;
     var playing = !!(a && !a.paused && !a.ended && a.readyState > 2);
     var duration = a && isFinite(a.duration) ? Math.round(a.duration * 1000) : 0;
     var position = a && isFinite(a.currentTime) ? Math.round(a.currentTime * 1000) : 0;
@@ -143,12 +160,13 @@
       cover: meta.cover || '',
       duration: duration,
       position: position,
-      playing: playing
+      playing: playing,
+      lyric: lyricText
     };
 
     // 秒级签名去重，避免每 800ms 都跨进程调用
     var sig = payload.title + '|' + payload.artist + '|' + payload.playing
-      + '|' + Math.floor(position / 1000) + '|' + duration;
+      + '|' + Math.floor(position / 1000) + '|' + duration + '|' + payload.lyric;
     if (sig === lastSig) return;
     lastSig = sig;
 
